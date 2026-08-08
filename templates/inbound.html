@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}کاربران اینباند{% endblock %}
+{% block content %}
+<a href="/dashboard" class="btn btn-outline-secondary mb-3">&larr; بازگشت</a>
+<h3>اینباند: {{ inbound.protocol|upper }} {{ inbound.domain }}:{{ inbound.external_port }}</h3>
+<hr>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4>کاربران</h4>
+    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addUserModal">
+        <i class="fa fa-user-plus"></i> افزودن کاربر
+    </button>
+</div>
+
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>ایمیل</th>
+            <th>UUID</th>
+            <th>مصرف / حجم (GB)</th>
+            <th>انقضا</th>
+            <th>وضعیت</th>
+            <th>لینک اشتراک</th>
+            <th>عملیات</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for user in users %}
+        <tr>
+            <td>{{ user.email }}</td>
+            <td><code>{{ user.uuid[:12] }}...</code></td>
+            <td>{{ "%.2f"|format(user.traffic_used/1073741824) }} / {{ "%.2f"|format(user.traffic_limit/1073741824) if user.traffic_limit else '∞' }}</td>
+            <td>{{ user.expire_at.strftime('%Y-%m-%d') if user.expire_at else '-' }}</td>
+            <td>
+                <span class="badge {% if user.is_active %}bg-success{% else %}bg-danger{% endif %}">
+                    {{ 'فعال' if user.is_active else 'غیرفعال' }}
+                </span>
+            </td>
+            <td>
+                <div class="input-group">
+                    <input type="text" class="form-control form-control-sm" readonly value="{{ request.url.scheme }}://{{ request.url.hostname }}/sub/{{ user.sub_token }}" id="sub_{{ user.id }}">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="copySub('{{ user.id }}')" title="کپی"><i class="fa fa-copy"></i></button>
+                </div>
+            </td>
+            <td>
+                <button class="btn btn-info btn-sm" onclick="showConfig('{{ user.id }}')">کانفیگ</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteUser('{{ user.id }}')">حذف</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- مودال‌ها مانند نسخه قبلی، بدون تغییر -->
+<!-- Modal افزودن کاربر -->
+<div class="modal fade" id="addUserModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="addUserForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">افزودن کاربر</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">ایمیل (اختیاری)</label>
+                        <input type="text" name="email" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">محدودیت ترافیک (گیگابایت، 0 = نامحدود)</label>
+                        <input type="number" step="any" name="traffic_limit_gb" class="form-control" value="0">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">تاریخ انقضا</label>
+                        <input type="datetime-local" name="expire_at" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">لغو</button>
+                    <button type="submit" class="btn btn-primary">ایجاد</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal نمایش کانفیگ -->
+<div class="modal fade" id="configModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">اطلاعات کانفیگ</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center">
+                <p id="configLink" class="text-break"></p>
+                <img id="qrImage" src="" alt="QR Code" class="img-fluid mb-3" style="max-height: 300px;">
+                <br>
+                <button class="btn btn-outline-primary" onclick="copyToClipboard(document.getElementById('configLink').innerText)">کپی لینک</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const inboundId = {{ inbound.id }};
+
+async function deleteUser(id) {
+    if (confirm("حذف کاربر؟")) {
+        await fetch(`/inbounds/${inboundId}/users/${id}`, { method: 'DELETE' });
+        location.reload();
+    }
+}
+
+async function showConfig(userId) {
+    const res = await fetch(`/inbounds/${inboundId}/users/${userId}`);
+    const user = await res.json();
+    document.getElementById('configLink').innerText = user.config_link;
+    document.getElementById('qrImage').src = 'data:image/png;base64,' + user.qr_code_data;
+    new bootstrap.Modal(document.getElementById('configModal')).show();
+}
+
+function copySub(userId) {
+    const input = document.getElementById('sub_' + userId);
+    input.select();
+    document.execCommand('copy');
+    alert('لینک اشتراک کپی شد');
+}
+
+document.getElementById('addUserForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const data = {};
+    formData.forEach((v,k) => {
+        if (k === 'traffic_limit_gb') v = parseFloat(v);
+        if (k === 'expire_at' && v === '') v = null;
+        data[k] = v;
+    });
+    await fetch(`/inbounds/${inboundId}/users/`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+    location.reload();
+});
+</script>
+{% endblock %}
